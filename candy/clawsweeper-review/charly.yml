@@ -152,7 +152,18 @@ clawsweeper-review:
                   fi
                   : "${CLAWSWEEPER_TARGET_REPO:?CLAWSWEEPER_TARGET_REPO is required}"
                   : "${BASE_SHA:?BASE_SHA is required}"
-                  export CODEX_HOME="${CODEX_HOME:-/etc/clawsweeper}"
+                  # CODEX_HOME MUST BE WRITABLE. Codex keeps its app-server state there, and
+                  # this image runs as uid 1000 while /etc/clawsweeper is root-owned 0755 —
+                  # measured: every review died with "failed to initialize in-process
+                  # app-server client: Permission denied (os error 13)", before the model was
+                  # ever reached. The image file stays the ONE source of truth; the runtime
+                  # home is a per-user copy of it.
+                  if [ -z "${CODEX_HOME:-}" ] || [ ! -w "${CODEX_HOME}" ]; then
+                    CODEX_HOME="${HOME:-/tmp}/.codex"
+                    export CODEX_HOME
+                    mkdir -p "${CODEX_HOME}"
+                    [ -f "${CODEX_HOME}/config.toml" ] || cp /etc/clawsweeper/config.toml "${CODEX_HOME}/config.toml"
+                  fi
                   cd /opt/clawsweeper
                   exec node dist/clawsweeper.js review --local-range \
                     --target-repo "${CLAWSWEEPER_TARGET_REPO}" \
@@ -229,6 +240,29 @@ clawsweeper-review:
                   test -f /etc/clawsweeper/config.toml
                   grep -qx 'base_url = "https://ollama.com/v1"' /etc/clawsweeper/config.toml
                   grep -qx 'wire_api = "responses"' /etc/clawsweeper/config.toml
+            # RUNTIME context on purpose: the read-only /etc/clawsweeper only bites the image's
+            # OWN user (uid 1000), and a build-time check runs as root where everything is
+            # writable — so a build-scoped assertion could never see this. It needs no key:
+            # Codex stops at the auth boundary, which is exactly the signal wanted.
+            - check: Codex initialises its app-server as the image's own user and reaches the model boundary
+              id: check-codex-runtime
+              run_as: "${USER}"
+              context: [runtime]
+              command: |
+                  set -euo pipefail
+                  home="${HOME}/.codex"
+                  mkdir -p "$home"
+                  [ -f "$home/config.toml" ] || cp /etc/clawsweeper/config.toml "$home/config.toml"
+                  out="$(cd /opt/clawsweeper && CODEX_HOME="$home" timeout 60 codex exec "reply hi" </dev/null 2>&1 || true)"
+                  printf '%s\n' "$out" | tail -3
+                  # The regression this guards: an unwritable CODEX_HOME dies at
+                  # "failed to initialize in-process app-server client: Permission denied"
+                  # BEFORE any model work. Reaching the key check proves the path is clear.
+                  if printf '%s\n' "$out" | grep -q 'Permission denied'; then
+                    echo "codex cannot initialise as ${USER}: the CODEX_HOME is not writable"
+                    exit 1
+                  fi
+                  printf '%s\n' "$out" | grep -q 'OLLAMA_API_KEY'
             # Exercise the entrypoint itself, so the flag surface it passes is asserted at build
             # time; the full model round-trip is the consumer bed's job (it needs a key).
             - check: the one-shot review entrypoint runs and describes its invocation
