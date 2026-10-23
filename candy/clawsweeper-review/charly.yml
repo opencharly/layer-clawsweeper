@@ -299,6 +299,33 @@ clawsweeper-review:
                   out="$(/usr/local/bin/clawsweeper-review --help)"
                   printf '%s\n' "$out" | grep -q -- '--local-range'
                   printf '%s\n' "$out" | grep -q -- '--result-format json'
+            # THE INPUT SCANNER MUST BE BAKED. The engine refuses every review with
+            # "Agent input scan refused: scanner_unavailable" when it cannot resolve its
+            # TruffleHog. The bootstrap downloads it on demand — so an image that never
+            # installs it depends on egress at REVIEW time and fails closed when that path is
+            # unavailable, which is exactly what happened on the runner (crabbox@16): the
+            # review ran, then refused its own input.
+            #
+            # It is installed AS THE IMAGE USER into that user's own cache: the bootstrap
+            # rejects a cache that is not private to the caller ("Trusted scanner cache is not
+            # private to the current user"), so a root-installed tree cannot be used.
+            - run: "pre-install the engine's input scanner into the image user's cache"
+              run_as: "${USER}"
+              context: [build]
+              command: |
+                  set -euo pipefail
+                  cd /opt/clawsweeper
+                  node scripts/setup-review-tools.mjs --timeout-ms 300000
+            - check: the input scanner is baked and resolves without any download
+              id: check-input-scanner
+              run_as: "${USER}"
+              context: [build]
+              command: |
+                  set -euo pipefail
+                  cd /opt/clawsweeper
+                  scanner="$(node scripts/setup-review-tools.mjs --timeout-ms 60000)"
+                  test -x "$scanner"
+                  "$scanner" --version
 
 clawsweeper-review-skill:
     skill:
