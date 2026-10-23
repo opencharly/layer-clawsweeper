@@ -1,0 +1,210 @@
+clawsweeper-review:
+    candy:
+        description: |
+            The ClawSweeper review engine as a runnable artefact: a PINNED upstream checkout,
+            Node 24 + pnpm 12.4.1, the OpenAI Codex CLI (the engine's only runner), a
+            CODEX_HOME configured for the OpenCharly Ollama Cloud endpoint, and an
+            `opencharly` target-profile overlay so any opencharly/<repo> resolves.
+
+            This image is the REVIEW HALF of PR validation. It is run as a disposable
+            container with the PR tree mounted read-only and NO GitHub token: `--local-range`
+            reads merge-base(base, HEAD)..HEAD and performs no GitHub writes, so the verdict
+            leaves the sandbox as JSON and the caller posts it. Codex's sandbox needs
+            bubblewrap and unprivileged user namespaces; the runner image enables those.
+
+            The engine/endpoint pairing is MEASURED, not assumed: Codex 0.162.1 speaks
+            stateless Responses to https://ollama.com/v1 and performs real shell tool calls
+            (probe: `codex exec` ran `uname -s && uname -m`, returned Linux/x86_64). Codex
+            accepts only `wire_api = "responses"`; Ollama Cloud serves that.
+        distro:
+            ubuntu:
+                package:
+                    - git
+                    - curl
+                    - ca-certificates
+                    - xz-utils
+                    - jq
+                    - python3
+                    - bubblewrap
+                    - libicu74
+                    - libssl3t64
+        var:
+            # Pinned upstream commit (the org's vendored clawsweeper). Advance producer-first:
+            # upstream merge -> this pin -> the image.
+            CLAWSWEEPER_COMMIT: 1fa8e7d22d3341d060ddafa521c4355607bed728
+            NODE_VERSION: 24.22.1
+            CODEX_VERSION: 0.162.1
+            PNPM_VERSION: 12.4.1
+        plan:
+            - run: "install the pinned Node runtime from the official tarball"
+              run_as: root
+              context: [build]
+              command: |
+                  set -euo pipefail
+                  V="${NODE_VERSION}"
+                  curl -fsSL "https://nodejs.org/dist/v${V}/node-v${V}-linux-x64.tar.xz" -o /tmp/node.tar.xz
+                  tar -xJf /tmp/node.tar.xz -C /opt
+                  ln -sfn "/opt/node-v${V}-linux-x64" /opt/node
+                  for b in node npm npx corepack; do ln -sf "/opt/node/bin/$b" "/usr/local/bin/$b"; done
+            - run: "activate the pinned pnpm through corepack"
+              run_as: root
+              context: [build]
+              command: |
+                  set -euo pipefail
+                  export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+                  corepack enable
+                  corepack prepare "pnpm@${PNPM_VERSION}" --activate
+            - run: "install the pinned Codex CLI"
+              run_as: root
+              context: [build]
+              command: |
+                  set -euo pipefail
+                  npm install --global "@openai/codex@${CODEX_VERSION}"
+            - run: "clone the pinned ClawSweeper checkout and build it"
+              run_as: root
+              context: [build]
+              command: |
+                  set -euo pipefail
+                  rm -rf /opt/clawsweeper
+                  git clone --quiet https://github.com/opencharly/clawsweeper.git /opt/clawsweeper
+                  git -C /opt/clawsweeper checkout --quiet "${CLAWSWEEPER_COMMIT}"
+                  cd /opt/clawsweeper
+                  export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+                  pnpm install --frozen-lockfile
+                  pnpm run build
+                  # The review runs from dist/ only; dev dependencies are build-time.
+                  pnpm prune --prod
+            - run: "add the opencharly target-profile fallback so any opencharly/<repo> resolves"
+              run_as: root
+              context: [build]
+              command: |
+                  set -euo pipefail
+                  python3 - <<'PY'
+                  import json
+                  path = "/opt/clawsweeper/config/target-repositories.json"
+                  data = json.load(open(path))
+                  owner = "opencharly"
+                  fallbacks = data.setdefault("generic_fallbacks", [])
+                  if not any(f.get("owner") == owner for f in fallbacks):
+                      fallbacks.append({
+                          "owner": owner,
+                          "deny_repositories": [],
+                          "package_manager": "npm",
+                          "prompt_note": (
+                              "Review the repository's source tree and current default branch with "
+                              "target-native tooling and evidence. Read the root AGENTS.md and any "
+                              "ancestor AGENTS.md before judging."
+                          ),
+                          "apply_close_rules": {"issue": [], "pull_request": []},
+                      })
+                  json.dump(data, open(path, "w"), indent=2)
+                  print("opencharly fallback present")
+                  PY
+            - run: "write the Codex home configured for the Ollama Cloud endpoint"
+              run_as: root
+              context: [build]
+              command: |
+                  set -euo pipefail
+                  install -d -m 0755 /etc/clawsweeper
+                  cat > /etc/clawsweeper/codex-config.toml <<'TOML'
+                  model = "deepseek-v4.1-flash"
+                  model_reasoning_effort = "low"
+                  model_provider = "ollama-cloud"
+
+                  [model_providers.ollama-cloud]
+                  name = "Ollama Cloud"
+                  base_url = "https://ollama.com/v1"
+                  env_key = "OLLAMA_API_KEY"
+                  wire_api = "responses"
+                  requires_openai_auth = false
+                  TOML
+            - run: "install the one-shot review entrypoint"
+              run_as: root
+              context: [build]
+              command: |
+                  set -euo pipefail
+                  cat > /usr/local/bin/clawsweeper-review <<'SH'
+                  #!/usr/bin/env bash
+                  # One review of the tree mounted at /target against the base ref in BASE_SHA.
+                  # --local-range reads merge-base(base, HEAD)..HEAD, refuses a dirty tree, and
+                  # makes NO GitHub reads or writes, so no token is needed or accepted here.
+                  set -euo pipefail
+                  : "${CLAWSWEEPER_TARGET_REPO:?CLAWSWEEPER_TARGET_REPO is required}"
+                  : "${BASE_SHA:?BASE_SHA is required}"
+                  export CODEX_HOME="${CODEX_HOME:-/etc/clawsweeper}"
+                  cd /opt/clawsweeper
+                  exec node dist/clawsweeper.js review --local-range \
+                    --target-repo "${CLAWSWEEPER_TARGET_REPO}" \
+                    --target-dir "${TARGET_DIR:-/target}" \
+                    --base "${BASE_SHA}" \
+                    --result-format json \
+                    --output-retention summary
+                  SH
+                  chmod 0755 /usr/local/bin/clawsweeper-review
+            - check: Node 24 reports its version
+              id: check-node
+              run_as: root
+              context: [build]
+              command: |
+                  set -euo pipefail
+                  node --version
+              stdout:
+                  contains: "v24."
+            - check: pnpm reports the pinned version
+              id: check-pnpm
+              run_as: root
+              context: [build]
+              command: |
+                  set -euo pipefail
+                  pnpm --version
+              stdout:
+                  contains: "12.4.1"
+            - check: the Codex CLI reports the pinned version
+              id: check-codex
+              run_as: root
+              context: [build]
+              command: |
+                  set -euo pipefail
+                  codex --version
+              stdout:
+                  contains: "0.162.1"
+            - check: the built engine answers its own help
+              id: check-engine
+              run_as: root
+              context: [build]
+              command: |
+                  set -euo pipefail
+                  node /opt/clawsweeper/dist/clawsweeper.js --help >/dev/null
+            - check: the opencharly target fallback is present
+              id: check-profile
+              run_as: root
+              context: [build]
+              command: |
+                  set -euo pipefail
+                  jq -e '.generic_fallbacks[] | select(.owner == "opencharly")' \
+                    /opt/clawsweeper/config/target-repositories.json >/dev/null
+            - check: the Codex home names the Ollama Cloud responses endpoint
+              id: check-codex-config
+              run_as: root
+              context: [build]
+              command: |
+                  set -euo pipefail
+                  grep -qx 'base_url = "https://ollama.com/v1"' /etc/clawsweeper/codex-config.toml
+                  grep -qx 'wire_api = "responses"' /etc/clawsweeper/codex-config.toml
+            - check: the one-shot review entrypoint is installed and executable
+              id: check-entrypoint
+              run_as: root
+              context: [build]
+              command: |
+                  set -euo pipefail
+                  test -x /usr/local/bin/clawsweeper-review
+
+clawsweeper-review-skill:
+    skill:
+        name: clawsweeper-review
+        family: check
+        owner: clawsweeper-review
+        description: |-
+            The ClawSweeper review engine as a disposable container: pinned upstream, Codex on the
+            Ollama Cloud endpoint, the opencharly target profile, and a no-token `--local-range`
+            review whose JSON verdict the caller posts.
