@@ -325,6 +325,16 @@ clawsweeper-review:
                   cd /opt/clawsweeper
                   scanner="$(node scripts/setup-review-tools.mjs --timeout-ms 60000)"
                   test -x "$scanner"
+                  # ENFORCE the safety claim, do not assume it: the cache must live under THIS
+                  # user's home, be owned by it, and be private. A bake that ran as root would
+                  # land in /root and leave this user with nothing — this fails that build
+                  # instead of passing on a tree the review can never use.
+                  case "$scanner" in
+                    "${HOME}/.clawsweeper-review-tools/"*) ;;
+                    *) echo "scanner is outside this user's private cache: $scanner"; exit 1 ;;
+                  esac
+                  test "$(stat -c %U "$scanner")" = "$(id -un)"
+                  test "$(stat -c %a "${HOME}/.clawsweeper-review-tools")" = "700"
                   "$scanner" --version
 
 clawsweeper-review-skill:
