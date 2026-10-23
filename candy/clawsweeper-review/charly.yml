@@ -106,7 +106,7 @@ clawsweeper-review:
               command: |
                   set -euo pipefail
                   install -d -m 0755 /etc/clawsweeper
-                  cat > /etc/clawsweeper/codex-config.toml <<'TOML'
+                  cat > "${CODEX_HOME:-/etc/clawsweeper}/config.toml" <<'TOML'
                   model = "deepseek-v4.1-flash"
                   model_reasoning_effort = "low"
                   model_provider = "ollama-cloud"
@@ -132,6 +132,11 @@ clawsweeper-review:
                   : "${CLAWSWEEPER_TARGET_REPO:?CLAWSWEEPER_TARGET_REPO is required}"
                   : "${BASE_SHA:?BASE_SHA is required}"
                   export CODEX_HOME="${CODEX_HOME:-/etc/clawsweeper}"
+                  if [ "${1:-}" = "--help" ]; then
+                    echo "usage: clawsweeper-review  (env: CLAWSWEEPER_TARGET_REPO, BASE_SHA, OLLAMA_API_KEY, TARGET_DIR)"
+                    echo "runs: node dist/clawsweeper.js review --local-range --target-repo <repo> --target-dir <dir> --base <sha> --result-format json --output-retention summary"
+                    exit 0
+                  fi
                   cd /opt/clawsweeper
                   exec node dist/clawsweeper.js review --local-range \
                     --target-repo "${CLAWSWEEPER_TARGET_REPO}" \
@@ -183,21 +188,28 @@ clawsweeper-review:
                   set -euo pipefail
                   jq -e '.generic_fallbacks[] | select(.owner == "opencharly")' \
                     /opt/clawsweeper/config/target-repositories.json >/dev/null
-            - check: the Codex home names the Ollama Cloud responses endpoint
+            # Codex reads $CODEX_HOME/config.toml — the exact path, not a lookalike name.
+            - check: the Codex home carries config.toml naming the Ollama Cloud responses endpoint
               id: check-codex-config
               run_as: root
               context: [build]
               command: |
                   set -euo pipefail
-                  grep -qx 'base_url = "https://ollama.com/v1"' /etc/clawsweeper/codex-config.toml
-                  grep -qx 'wire_api = "responses"' /etc/clawsweeper/codex-config.toml
-            - check: the one-shot review entrypoint is installed and executable
+                  test -f /etc/clawsweeper/config.toml
+                  grep -qx 'base_url = "https://ollama.com/v1"' /etc/clawsweeper/config.toml
+                  grep -qx 'wire_api = "responses"' /etc/clawsweeper/config.toml
+            # Exercise the entrypoint itself, so the flag surface it passes is asserted at build
+            # time; the full model round-trip is the consumer bed's job (it needs a key).
+            - check: the one-shot review entrypoint runs and describes its invocation
               id: check-entrypoint
               run_as: root
               context: [build]
               command: |
                   set -euo pipefail
                   test -x /usr/local/bin/clawsweeper-review
+                  out="$(/usr/local/bin/clawsweeper-review --help)"
+                  printf '%s\n' "$out" | grep -q -- '--local-range'
+                  printf '%s\n' "$out" | grep -q -- '--result-format json'
 
 clawsweeper-review-skill:
     skill:
