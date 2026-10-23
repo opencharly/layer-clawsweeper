@@ -353,7 +353,8 @@ clawsweeper-review-skill:
         name: clawsweeper-review
         family: check
         owner: clawsweeper-review
-        description: |-
-            The ClawSweeper review engine as a disposable container: pinned upstream, Codex on the
-            Ollama Cloud endpoint, the opencharly target profile, and a no-token `--local-range`
-            review whose JSON verdict the caller posts.
+        # The DESCRIPTION is not declared here: the file that owns the body
+        # (.agents/skills/clawsweeper-review/SKILL.md) is the single source of record, and
+        # the corpus generator refuses a node whose inline `description:` disagrees with
+        # that file's frontmatter. An inline copy would be a second source of truth for one
+        # published page — the exact ambiguity the relocation to files removed.
