@@ -20,6 +20,7 @@ clawsweeper-review:
         # of an image composed from this candy resolves it through the credential store.
         secret_accept:
             - name: OLLAMA_API_KEY
+              description: "Ollama Cloud API key for the review model; supplied at run time, never baked into the image."
               key: charly/api-key/ollama
         distro:
             ubuntu:
