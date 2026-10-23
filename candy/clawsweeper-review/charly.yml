@@ -316,25 +316,29 @@ clawsweeper-review:
                   set -euo pipefail
                   cd /opt/clawsweeper
                   node scripts/setup-review-tools.mjs --timeout-ms 300000
-            - check: the input scanner is baked and resolves without any download
+            - check: the input scanner is baked into THIS user's private cache
               id: check-input-scanner
               run_as: "${USER}"
               context: [build]
               command: |
                   set -euo pipefail
-                  cd /opt/clawsweeper
-                  scanner="$(node scripts/setup-review-tools.mjs --timeout-ms 60000)"
+                  # Do NOT go through scripts/setup-review-tools.mjs here: that helper
+                  # DOWNLOADS on demand, so a check that calls it passes whether or not the
+                  # image baked anything. This inspects the cache the build was supposed to
+                  # produce, so an un-baked image fails.
+                  root="${HOME}/.clawsweeper-review-tools"
+                  test -d "$root"
+                  scanner="$(find "$root" -type f -name trufflehog -perm -u+x | head -1)"
+                  test -n "$scanner"
                   test -x "$scanner"
-                  # ENFORCE the safety claim, do not assume it: the cache must live under THIS
-                  # user's home, be owned by it, and be private. A bake that ran as root would
-                  # land in /root and leave this user with nothing — this fails that build
-                  # instead of passing on a tree the review can never use.
-                  case "$scanner" in
-                    "${HOME}/.clawsweeper-review-tools/"*) ;;
-                    *) echo "scanner is outside this user's private cache: $scanner"; exit 1 ;;
-                  esac
-                  test "$(stat -c %U "$scanner")" = "$(id -un)"
-                  test "$(stat -c %a "${HOME}/.clawsweeper-review-tools")" = "700"
+                  # The bake and this check must run as the IMAGE user, never root: if
+                  # `run_as: "${USER}"` ever resolved to the build process's root user, the
+                  # cache would live in /root and no review could use it.
+                  echo "check user: $(id -un) uid=$(id -u) home=${HOME}"
+                  test "$(id -u)" -ne 0
+                  test "$(id -un)" = "$(stat -c %U "$HOME")"
+                  test "$(id -un)" = "$(stat -c %U "$root")"
+                  test "$(stat -c %a "$root")" = "700"
                   "$scanner" --version
 
 clawsweeper-review-skill:
