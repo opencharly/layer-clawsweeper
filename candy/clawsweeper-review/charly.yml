@@ -129,14 +129,15 @@ clawsweeper-review:
                   # --local-range reads merge-base(base, HEAD)..HEAD, refuses a dirty tree, and
                   # makes NO GitHub reads or writes, so no token is needed or accepted here.
                   set -euo pipefail
-                  : "${CLAWSWEEPER_TARGET_REPO:?CLAWSWEEPER_TARGET_REPO is required}"
-                  : "${BASE_SHA:?BASE_SHA is required}"
-                  export CODEX_HOME="${CODEX_HOME:-/etc/clawsweeper}"
+                  # --help FIRST: a usage request must not require configuration.
                   if [ "${1:-}" = "--help" ]; then
                     echo "usage: clawsweeper-review  (env: CLAWSWEEPER_TARGET_REPO, BASE_SHA, OLLAMA_API_KEY, TARGET_DIR)"
                     echo "runs: node dist/clawsweeper.js review --local-range --target-repo <repo> --target-dir <dir> --base <sha> --result-format json --output-retention summary"
                     exit 0
                   fi
+                  : "${CLAWSWEEPER_TARGET_REPO:?CLAWSWEEPER_TARGET_REPO is required}"
+                  : "${BASE_SHA:?BASE_SHA is required}"
+                  export CODEX_HOME="${CODEX_HOME:-/etc/clawsweeper}"
                   cd /opt/clawsweeper
                   exec node dist/clawsweeper.js review --local-range \
                     --target-repo "${CLAWSWEEPER_TARGET_REPO}" \

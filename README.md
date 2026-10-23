@@ -15,7 +15,7 @@ endpoint as the model backend.
 | Node | `NODE_VERSION` (24.x) | the engine's runtime |
 | pnpm | `PNPM_VERSION` (12.4.1) | the engine's package manager, via corepack |
 | OpenAI Codex CLI | `CODEX_VERSION` (0.162.1) | the engine's only runner; Codex accepts only `wire_api = "responses"` |
-| Ollama Cloud provider | `/etc/clawsweeper/codex-config.toml` | `https://ollama.com/v1`, model `deepseek-v4.1-flash` |
+| Ollama Cloud provider | `/etc/clawsweeper/config.toml` | `https://ollama.com/v1`, model `deepseek-v4.1-flash` |
 | `opencharly` target profile | config overlay | any `opencharly/<repo>` resolves without a per-repo entry |
 | `clawsweeper-review` | `/usr/local/bin` | one-shot `--local-range` review, JSON verdict on stdout |
 
