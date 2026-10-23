@@ -123,7 +123,14 @@ clawsweeper-review:
                   install -d -m 0755 /etc/clawsweeper
                   cat > "${CODEX_HOME:-/etc/clawsweeper}/config.toml" <<'TOML'
                   model = "deepseek-v4.1-flash"
-                  model_reasoning_effort = "low"
+                  # MEDIUM, not LOW. The review's last act is emitting a rigid JSON decision, and
+                  # at `low` that is where it broke: MEASURED on opencharly/crabbox#17
+                  # (2026-10-23), `decision-repair-turn #0 failed` with
+                  # `codex-failure classification=content_or_output`, so the engine exited 1 and
+                  # the advisory check went red even though a report existed. The same run
+                  # reported `confidence=low`. This knob is the model side of that failure; the
+                  # engine-side classification stays red by design.
+                  model_reasoning_effort = "medium"
                   model_provider = "ollama-cloud"
 
                   [model_providers.ollama-cloud]
