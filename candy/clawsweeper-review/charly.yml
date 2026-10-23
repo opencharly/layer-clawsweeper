@@ -170,12 +170,19 @@ clawsweeper-review:
                   mkdir -p "${CODEX_HOME}"
                   [ -f "${CODEX_HOME}/config.toml" ] || cp /etc/clawsweeper/config.toml "${CODEX_HOME}/config.toml"
                   cd /opt/clawsweeper
+                  # EXTRA ENGINE OPTIONS ARE FORWARDED, not swallowed: the caller may add
+                  # --body-file (so the review judges the REAL PR body and its proof claims),
+                  # --output-retention debug (round-over-round history: the next run receives
+                  # the previous findings and verifies fixes instead of re-raising them),
+                  # --additional-policy, --verbose. The image decides the mode (--local-range)
+                  # and the output format; the caller may refine it.
                   exec node dist/clawsweeper.js review --local-range \
                     --target-repo "${CLAWSWEEPER_TARGET_REPO}" \
                     --target-dir "${TARGET_DIR:-/target}" \
                     --base "${BASE_SHA}" \
                     --result-format json \
-                    --output-retention summary
+                    --output-retention "${OUTPUT_RETENTION:-summary}" \
+                    "$@"
                   SH
                   chmod 0755 /usr/local/bin/clawsweeper-review
             - check: Node 24 reports its version
