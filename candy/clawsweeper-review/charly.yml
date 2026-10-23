@@ -16,6 +16,11 @@ clawsweeper-review:
             stateless Responses to https://ollama.com/v1 and performs real shell tool calls
             (probe: `codex exec` ran `uname -s && uname -m`, returned Linux/x86_64). Codex
             accepts only `wire_api = "responses"`; Ollama Cloud serves that.
+        # The model key is RUN-TIME only: the image names the env var, never a value. A deploy
+        # of an image composed from this candy resolves it through the credential store.
+        secret_accept:
+            - name: OLLAMA_API_KEY
+              key: charly/api-key/ollama
         distro:
             ubuntu:
                 package:
