@@ -52,20 +52,24 @@ clawsweeper-review:
                   tar -xJf /tmp/node.tar.xz -C /opt
                   ln -sfn "/opt/node-v${V}-linux-x64" /opt/node
                   for b in node npm npx corepack; do ln -sf "/opt/node/bin/$b" "/usr/local/bin/$b"; done
-            - run: "activate the pinned pnpm through corepack"
+            # pnpm comes from npm, NOT corepack. Corepack answers with its own "known good"
+            # version whenever it is invoked outside a tree that declares `packageManager` —
+            # measured: `pnpm --version` in `/` reported 12.15.0 and DOWNLOADED it at run time,
+            # while `/opt/clawsweeper/package.json` pins 12.4.1. That made the "pnpm 12.4.1"
+            # claim false everywhere outside the checkout and added a network dependency to a
+            # command that must be offline. A real npm-installed pnpm is version-stable wherever
+            # it runs and needs no download.
+            - run: "install the pinned pnpm and the pinned Codex CLI"
               run_as: root
               context: [build]
               command: |
                   set -euo pipefail
-                  export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
-                  corepack enable
-                  corepack prepare "pnpm@${PNPM_VERSION}" --activate
-            - run: "install the pinned Codex CLI"
-              run_as: root
-              context: [build]
-              command: |
-                  set -euo pipefail
-                  npm install --global "@openai/codex@${CODEX_VERSION}"
+                  npm install --global "pnpm@${PNPM_VERSION}" "@openai/codex@${CODEX_VERSION}"
+                  # npm's global bin lives in the Node tree, which is NOT on PATH; the two
+                  # binaries the image advertises must be reachable by name. `codex` was the
+                  # missing one — measured: `codex: command not found` at check time while
+                  # /opt/node/bin/codex existed.
+                  for b in pnpm codex; do ln -sf "/opt/node/bin/$b" "/usr/local/bin/$b"; done
             - run: "clone the pinned ClawSweeper checkout and build it"
               run_as: root
               context: [build]
@@ -75,7 +79,6 @@ clawsweeper-review:
                   git clone --quiet https://github.com/opencharly/clawsweeper.git /opt/clawsweeper
                   git -C /opt/clawsweeper checkout --quiet "${CLAWSWEEPER_COMMIT}"
                   cd /opt/clawsweeper
-                  export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
                   pnpm install --frozen-lockfile
                   pnpm run build
                   # The review runs from dist/ only; dev dependencies are build-time.
@@ -95,6 +98,12 @@ clawsweeper-review:
                       fallbacks.append({
                           "owner": owner,
                           "deny_repositories": [],
+                          # REQUIRED, not decoration: the engine validates every fallback's
+                          # allow_repo_name_pattern as a string and throws on the whole file
+                          # without it ("generic_fallbacks[2].allow_repo_name_pattern must be a
+                          # string") — measured on this image, where the engine would not start at
+                          # all. Kept identical to the two upstream entries.
+                          "allow_repo_name_pattern": "^[A-Za-z0-9_.-]+$",
                           "package_manager": "npm",
                           "prompt_note": (
                               "Review the repository's source tree and current default branch with "
@@ -180,13 +189,28 @@ clawsweeper-review:
                   codex --version
               stdout:
                   contains: "0.162.1"
-            - check: the built engine answers its own help
+            # NOT `dist/clawsweeper.js --help`: the engine has NO help path — it validates a
+            # hosted-review invocation instead and exits non-zero for EVERY bare call, so the
+            # old check could never pass (measured: `--help`, `review --help` and no-args all
+            # print the same "Hosted review requires --output-retention debug …" error).
+            # What the check must prove is that the BUILT tree loads and the profile overlay
+            # resolves — the two things that actually broke here. Importing the profile module
+            # is exactly what threw on the malformed overlay.
+            - check: the built engine loads and resolves an opencharly target through the overlay
               id: check-engine
               run_as: root
               context: [build]
               command: |
                   set -euo pipefail
-                  node /opt/clawsweeper/dist/clawsweeper.js --help >/dev/null
+                  test -s /opt/clawsweeper/dist/clawsweeper.js
+                  node --input-type=module -e '
+                  const m = await import("/opt/clawsweeper/dist/repository-profiles.js");
+                  const p = m.repositoryProfileFor("opencharly/fixture");
+                  if (p.packageManager !== "npm") {
+                    throw new Error("opencharly profile did not resolve: " + JSON.stringify(p).slice(0, 200));
+                  }
+                  console.log("profile-ok " + p.slug);
+                  '
             - check: the opencharly target fallback is present
               id: check-profile
               run_as: root
