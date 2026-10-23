@@ -158,12 +158,17 @@ clawsweeper-review:
                   # app-server client: Permission denied (os error 13)", before the model was
                   # ever reached. The image file stays the ONE source of truth; the runtime
                   # home is a per-user copy of it.
-                  if [ -z "${CODEX_HOME:-}" ] || [ ! -w "${CODEX_HOME}" ]; then
+                  # A DIRECTORY is required, not merely a writable path: a writable FILE at
+                  # CODEX_HOME would satisfy a bare -w test and then break Codex.
+                  if [ -z "${CODEX_HOME:-}" ] || [ ! -d "${CODEX_HOME}" ] || [ ! -w "${CODEX_HOME}" ]; then
                     CODEX_HOME="${HOME:-/tmp}/.codex"
                     export CODEX_HOME
-                    mkdir -p "${CODEX_HOME}"
-                    [ -f "${CODEX_HOME}/config.toml" ] || cp /etc/clawsweeper/config.toml "${CODEX_HOME}/config.toml"
                   fi
+                  # Seed UNCONDITIONALLY when the file is absent, not only in the redirect
+                  # branch: a caller who exports a writable but empty CODEX_HOME would
+                  # otherwise run Codex with no endpoint and no wire_api.
+                  mkdir -p "${CODEX_HOME}"
+                  [ -f "${CODEX_HOME}/config.toml" ] || cp /etc/clawsweeper/config.toml "${CODEX_HOME}/config.toml"
                   cd /opt/clawsweeper
                   exec node dist/clawsweeper.js review --local-range \
                     --target-repo "${CLAWSWEEPER_TARGET_REPO}" \
@@ -244,25 +249,44 @@ clawsweeper-review:
             # OWN user (uid 1000), and a build-time check runs as root where everything is
             # writable — so a build-scoped assertion could never see this. It needs no key:
             # Codex stops at the auth boundary, which is exactly the signal wanted.
-            - check: Codex initialises its app-server as the image's own user and reaches the model boundary
+            - check: the entrypoint gives Codex a writable home as the image's own user
               id: check-codex-runtime
               run_as: "${USER}"
               context: [runtime]
               command: |
                   set -euo pipefail
-                  home="${HOME}/.codex"
-                  mkdir -p "$home"
-                  [ -f "$home/config.toml" ] || cp /etc/clawsweeper/config.toml "$home/config.toml"
-                  out="$(cd /opt/clawsweeper && CODEX_HOME="$home" timeout 60 codex exec "reply hi" </dev/null 2>&1 || true)"
+                  # A one-commit fixture whose BASE IS HEAD: nothing to review, so the engine
+                  # stops before the model. This check is about the HOME, not a verdict, and it
+                  # must behave identically whether or not a key is injected — no billed call,
+                  # no key-shaped assertion.
+                  rm -rf /tmp/noop && mkdir -p /tmp/noop
+                  git init -q -b main /tmp/noop
+                  git -C /tmp/noop config user.email fixture@example.invalid
+                  git -C /tmp/noop config user.name fixture
+                  printf 'a\n' > /tmp/noop/x
+                  git -C /tmp/noop add x && git -C /tmp/noop commit -qm one
+                  head="$(git -C /tmp/noop rev-parse HEAD)"
+
+                  # Drive the ENTRYPOINT with CODEX_HOME UNSET. The redirect under test is the
+                  # entrypoint's own — seeding a home here would test a copy of it and would
+                  # pass even with the entrypoint still pointing at root-owned
+                  # /etc/clawsweeper (which is exactly how the defect shipped).
+                  rm -rf "${HOME}/.codex"
+                  out="$(unset CODEX_HOME; CLAWSWEEPER_TARGET_REPO=opencharly/fixture \
+                    BASE_SHA="$head" TARGET_DIR=/tmp/noop timeout 300 clawsweeper-review 2>&1 || true)"
                   printf '%s\n' "$out" | tail -3
-                  # The regression this guards: an unwritable CODEX_HOME dies at
-                  # "failed to initialize in-process app-server client: Permission denied"
-                  # BEFORE any model work. Reaching the key check proves the path is clear.
+
+                  # THE INVARIANT: the entrypoint redirected to a per-user home seeded from the
+                  # image config, and it is writable by THIS user. On the shipped defect no file
+                  # was created here and Codex died on
+                  # "failed to initialize in-process app-server client: Permission denied".
+                  test -s "${HOME}/.codex/config.toml"
+                  test -w "${HOME}/.codex"
                   if printf '%s\n' "$out" | grep -q 'Permission denied'; then
-                    echo "codex cannot initialise as ${USER}: the CODEX_HOME is not writable"
+                    echo "the engine died on the image's own permissions"
                     exit 1
                   fi
-                  printf '%s\n' "$out" | grep -q 'OLLAMA_API_KEY'
+                  echo CODEX-HOME-WRITABLE-AS-USER
             # Exercise the entrypoint itself, so the flag surface it passes is asserted at build
             # time; the full model round-trip is the consumer bed's job (it needs a key).
             - check: the one-shot review entrypoint runs and describes its invocation
