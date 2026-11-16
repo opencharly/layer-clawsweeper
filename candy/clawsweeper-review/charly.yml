@@ -32,7 +32,13 @@ clawsweeper-review:
                     - jq
                     - python3
                     - bubblewrap
-                    - libicu74
+                    # ICU is NOT version-stable across Ubuntu releases - measured, not assumed:
+                    # 24.04 (noble) ships libicu74 and has NO libicu78; 26.04 (resolute) ships
+                    # libicu78 and has NO libicu74. The org's default Ubuntu is now 26.04
+                    # (opencharly/opencharly#1068) and this candy's only consumer,
+                    # distro-ubuntu's box/clawsweeper-review, builds there - measured failing
+                    # with `E: Unable to locate package libicu74` on 26.04.
+                    - libicu78
                     - libssl3t64
             # CachyOS / Arch: the SAME dependency set under pac names. This is a translation,
             # not a second install path — the candy's own install is distro-agnostic (Node from
