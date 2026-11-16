@@ -34,6 +34,26 @@ clawsweeper-review:
                     - bubblewrap
                     - libicu74
                     - libssl3t64
+            # CachyOS / Arch: the SAME dependency set under pac names. This is a translation,
+            # not a second install path — the candy's own install is distro-agnostic (Node from
+            # the upstream nodejs.org tarball, pnpm + codex from npm), so only the package
+            # namespace differs. Without this section a CachyOS image composing the candy fails
+            # at the Node step exactly as the Ubuntu image did before its own section existed
+            # (measured there: `tar (child): xz: Cannot exec`).
+            # Names verified against the pac repos on the CachyOS-family base image:
+            # Repository extra|core + Name for each of git, curl, ca-certificates, xz, jq,
+            # python, bubblewrap, icu, openssl.
+            arch:
+                package:
+                    - git
+                    - curl
+                    - ca-certificates
+                    - xz
+                    - jq
+                    - python
+                    - bubblewrap
+                    - icu
+                    - openssl
         var:
             # Pinned upstream commit (the org's vendored clawsweeper). Advance producer-first:
             # upstream merge -> this pin -> the image.
